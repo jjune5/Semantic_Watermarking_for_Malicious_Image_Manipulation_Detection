@@ -34,6 +34,18 @@ wandb/
 lightning_logs/
 checkpoints/
 outputs/
+results/
+
+# ============================================================
+# Local extracted dataset
+# ============================================================
+semantic_wm/
+embeddings/*.npz
+
+# ============================================================
+# pytest
+# ============================================================
+.pytest_cache/
 
 # Colab default workspace mount path
 /content/
