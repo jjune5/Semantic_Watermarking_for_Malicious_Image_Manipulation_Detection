@@ -1,0 +1,67 @@
+# ============================================================
+# SENSITIVE DATA — DO NOT COMMIT
+# ============================================================
+# Image dataset (violence/sexual/normal) is not redistributable.
+# See README and Reproducibility Statement for dataset sources.
+datasets/
+dataset/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# ============================================================
+# REVIEW/BACKUP folders — contain sensitive image outputs
+# ============================================================
+figures_review/
+colab_codes_backup_with_outputs/
+
+# ============================================================
+# Notebook artifacts
+# ============================================================
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# ============================================================
+# Training artifacts (model weights, logs)
+# ============================================================
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+runs/
+wandb/
+lightning_logs/
+checkpoints/
+outputs/
+
+# Colab default workspace mount path
+/content/
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.env
+.envrc
+.python-version
+
+# ============================================================
+# OS / Editor
+# ============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
