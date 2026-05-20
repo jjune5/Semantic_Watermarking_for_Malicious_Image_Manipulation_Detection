@@ -1,295 +1,152 @@
 # CLIP-VAE & SDA-Net: Distribution-Based Semantic Watermarking
 
-Anonymous code release accompanying the paper submitted to **ICML AI4Good 2026**.
+Code release for the ICML AI4Good 2026 submission *Semantic Watermarking
+for Malicious Image Manipulation Detection*. The framework embeds a
+recoverable semantic reference into an image as a 100-bit watermark
+(**CLIP-VAE**) and exposes the direction of any post-hoc manipulation
+through a lightweight prototype module (**SDA-Net**).
 
-This repository contains the training and evaluation code for a
-distribution-based semantic watermarking framework built on top of
-CLIP embeddings, a VAE that produces a compact latent representation,
-and an SDA-Net (Semantic Distribution Alignment Network) that scores
-semantic drift via class-conditional distances in latent space.
+This repository extends the original submission with one additional
+ablation that **swaps the Gaussian VAE for a hyperspherical (vMF) VAE**
+so that the 100-D latent lives directly on the unit sphere `S^99`.
 
 ---
 
-## Pipeline overview
+## Pipeline
 
-<!--
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  Drop the rendered pipeline diagram at: figures/pipeline_overview.png │
-  │  GitHub will render the link below as the image once the file lands. │
-  └──────────────────────────────────────────────────────────────────────┘
--->
+![Pipeline overview](figures/pipeline_overview.png)
 
-![Pipeline overview — to be added at figures/pipeline_overview.png](figures/pipeline_overview.png)
-
-*Figure 1.  End-to-end pipeline: raw images → CLIP embeddings → latent
-representation (Euclidean VAE **or** vMF / hyperspherical VAE) →
-SDA-Net distance-based scoring → baseline & ablation comparisons.*
-
-In one paragraph: each image is encoded by CLIP-ViT-B/32 into a 512-D
-feature vector; a small VAE compresses that to a 100-D latent in which
-the three semantic classes (`normal`, `violence`, `sexual`) form
-distinguishable distributions; an SDA-Net then maps a query latent to
-per-class normalized distance scores that the paper uses as a
-quantitative measure of semantic drift.  We compare two choices of
-latent geometry — a **Euclidean Gaussian VAE** (`clip_vae.ipynb`,
-main) and a **hyperspherical von Mises–Fisher VAE**
-(`ablation_sphere_vae.ipynb`) — and report ablations on the KL weight
-β, the quantizer (VAE vs. VQ-VAE), the latent dimensionality, and the
-inference-time settings.
-
-> ⚠️ **Sensitive content notice.** Experiments use a class-balanced
-> dataset that contains the categories `normal`, `sexual`, and
-> `violence`. The image data is **not redistributed** with this
-> repository. Researchers must obtain the raw images from the public
-> sources listed below and run `preprocessing/prepare_dataset.py` to
-> reconstruct the canonical layout.
+Raw images → CLIP-ViT-B/32 (512-D) → VAE (100-D latent) → sign-based
+binarization → 100-bit watermark (channel-aware training with random
+bit-flip noise) → SDA-Net prototypes → per-class distance scores +
+direction-of-drift signal.
 
 ---
 
 ## Repository layout
 
 ```
-.
-├── colab_codes/                    # Notebooks (run in this order — see below)
-│   ├── clip_vae.ipynb              # 1. Train the (Euclidean) CLIP-VAE on semantic_wm
-│   ├── SDA_net.ipynb               # 2. Train SDA-Net on top of the CLIP-VAE features
-│   ├── baseline_exp.ipynb          # 3. Baseline comparison (SimHash, classifier, etc.)
-│   ├── ablation_beta_vae.ipynb     #    Ablation: KL weight β
-│   ├── ablation_vqvae.ipynb        #    Ablation: VQ-VAE in place of VAE
-│   ├── ablation_dimensions.ipynb   #    Ablation: latent dimensionality
-│   ├── ablation_inference.ipynb    #    Ablation: inference-time settings
-│   └── ablation_sphere_vae.ipynb   #    Ablation: hyperspherical (vMF) VAE — latent on S^99
-├── preprocessing/
-│   ├── prepare_dataset.py          # Build dataset/{train,test}/{normal,sexual,violence}/
-│   └── extract_clip_embeddings.py  # Run CLIP-ViT-B/32 over the dataset → embeddings/*.npy
-├── embeddings/                     # Pre-computed CLIP features (see "Pre-computed CLIP embeddings")
-├── figures/                        # Plots reproduced from notebook outputs (+ pipeline_overview.png)
-├── requirements.txt
-├── .gitignore
-└── README.md                       # ← this file
+colab_codes/
+  clip_vae.ipynb              # Main: Gaussian β-VAE on CLIP embeddings
+  SDA_net.ipynb               # Prototype-based drift detection on the latent
+  baseline_exp.ipynb          # 5-way bit-flip comparison (SimHash, ITQ, HashNet, …)
+  ablation_beta_vae.ipynb     # KL weight β sweep
+  ablation_vqvae.ipynb        # VQ-VAE vs VAE
+  ablation_dimensions.ipynb   # Latent dimensionality sweep
+  ablation_inference.ipynb    # Inference-time settings
+  ablation_sphere_vae.ipynb   # **Added — hyperspherical (vMF) latent on S^99**
+preprocessing/
+  prepare_dataset.py          # Build dataset/{train,test}/{normal,sexual,violence}/
+  extract_clip_embeddings.py  # CLIP-ViT-B/32 → embeddings/*.npy
+embeddings/                   # Pre-computed CLIP features (~16 MB)
+figures/                      # Plots from notebook runs + pipeline_overview.png
+requirements.txt
 ```
 
 ---
 
-## Environment setup
-
-Tested on **Python 3.10** with **CUDA 12.1** (Tesla T4 — Google Colab default
-configuration).
+## Quick start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# External dependency: VINE watermarking (not on PyPI)
-git clone https://github.com/Shilin-LU/VINE.git
+git clone https://github.com/Shilin-LU/VINE.git   # external watermarking backbone
 ```
 
----
+**Dataset.** Three public sources (`normal`: Kaggle News images, `violence`:
+HOD benchmark, `sexual`: Figshare adult-content set). Image data is
+**not** redistributed — see the paper's Reproducibility Statement.
+After downloading the three sources into `raw_images/{normal,violence,sexual}/`:
 
-## Dataset
-
-The semantic watermarking dataset is built from three public sources:
-
-| Category | Source | License |
-|----------|--------|---------|
-| `normal` | News Dataset with Images, Kaggle ([link](https://www.kaggle.com/datasets/mdkabinhasan/news-dataset-with-images/data)) | Kaggle terms (check on the dataset page) |
-| `violence` | HOD Benchmark Dataset (Ha et al., 2023, WACV-W 2024) — [GitHub](https://github.com/poori-nuna/HOD-Benchmark-Dataset), [arXiv:2310.05192](https://arxiv.org/abs/2310.05192) | **Research-only; redistribution prohibited** |
-| `sexual`   | Adult Content Dataset, Figshare ([link](https://figshare.com/articles/dataset/Adult_content_dataset/13456484)) | Figshare release (check on the dataset page) |
-
-### Sample counts and split
+```bash
+python preprocessing/prepare_dataset.py --input-dir ./raw_images --output-dir ./dataset --seed 42
+python preprocessing/extract_clip_embeddings.py --dataset-dir ./dataset --output-dir ./embeddings
+```
 
 | Class | Total | Train | Test |
-|-------|-------|-------|------|
+|---|---:|---:|---:|
 | `normal` | 4,000 | 3,200 | 800 |
 | `violence` | 2,002 | 1,601 | 401 |
 | `sexual` | 2,000 | 1,600 | 400 |
 
-**Train / test split:** 80 / 20 per class, deterministic with
-`--seed 42` in `preprocessing/prepare_dataset.py`.
+Pre-computed 512-D CLIP embeddings are shipped under `embeddings/` so
+the SDA-Net and most ablations can be re-run without redownloading the
+images.
 
 ---
 
-## Pre-computed CLIP embeddings (recommended for re-running ablations)
+## Notebook reference
 
-Because the three source datasets have different (and in one case
-restrictive) redistribution terms, this repository ships
-**pre-computed CLIP-ViT-B/32 image embeddings** instead of the raw
-images. The embeddings are 512-D feature vectors that cannot be
-inverted back into the source images, but they are sufficient to
-re-run every notebook except those that train the CLIP-conditioned
-encoder from scratch (`clip_vae.ipynb`, `ablation_sphere_vae.ipynb`),
-which still need the raw images to backprop through the encoder.
+| Notebook | Stage | Needs raw images? | Runtime on T4 |
+|---|---|:---:|---:|
+| `clip_vae.ipynb` | 1. Train β-VAE | ✅ | ~25 min |
+| `SDA_net.ipynb` | 2. Train SDA-Net | — (uses embeddings) | ~15 min |
+| `baseline_exp.ipynb` | 3. Bit-flip comparison | partial | ~90 min |
+| `ablation_beta_vae.ipynb` | Ablation | — | ~45 min |
+| `ablation_vqvae.ipynb` | Ablation | — | ~30 min |
+| `ablation_dimensions.ipynb` | Ablation | — | ~50 min |
+| `ablation_inference.ipynb` | Ablation | — | ~20 min |
+| `ablation_sphere_vae.ipynb` | Ablation (new) | ✅ | ~30 min |
 
-```
-embeddings/
-├── clip_features_train.npy   # (6398, 512) float32   ~12.5 MB
-├── clip_features_test.npy    # (1601, 512) float32   ~3.1  MB
-├── labels_train.npy          # (6398,)    int64      — 0=normal, 1=violence, 2=sexual
-└── labels_test.npy           # (1601,)    int64
-```
-
-> Three corrupted JPEG files in the training set were auto-skipped
-> by the extractor (6401 → 6398). The extraction script writes a
-> matching label array, so the indices stay aligned.
-
-### Producing the embeddings yourself
-
-Once `dataset/` is built (see the previous section), run:
-
-```bash
-python preprocessing/extract_clip_embeddings.py \
-    --dataset-dir ./dataset \
-    --output-dir  ./embeddings \
-    --batch-size  32
-```
-
-The script auto-selects the best available device
-(CUDA → Apple MPS → CPU). On Apple Silicon a full extraction takes a
-few minutes; on CPU expect ~15-30 minutes for ~8K images.
-
-### Loading the embeddings
-
-```python
-import numpy as np
-clip_train = np.load("embeddings/clip_features_train.npy")
-clip_test  = np.load("embeddings/clip_features_test.npy")
-y_train    = np.load("embeddings/labels_train.npy")
-y_test     = np.load("embeddings/labels_test.npy")
-```
-
-What you can reproduce from embeddings alone:
-
-| Notebook | Needs raw images? | Needs embeddings? |
-|----------|:-----------------:|:------------------:|
-| `clip_vae.ipynb` | ✅ yes | — |
-| `SDA_net.ipynb` | — | ✅ yes |
-| `baseline_exp.ipynb` | partial (watermark visualizations) | ✅ yes |
-| `ablation_beta_vae.ipynb`, `ablation_vqvae.ipynb`, `ablation_dimensions.ipynb`, `ablation_inference.ipynb` | — | ✅ yes |
-| `ablation_sphere_vae.ipynb` | ✅ yes (extracts CLIP embeddings on-the-fly during training) | — |
-
-> **Why we do not redistribute the data.**
-> The HOD violence dataset explicitly prohibits redistribution
-> ("shared for research purposes only … redistribution without
-> proper authorization is not permitted"). The adult-content
-> dataset and the Kaggle news set are subject to the terms of
-> their respective platforms. Each researcher must download the
-> three sources directly using the links above; we ship only
-> the preprocessing script that arranges them into the canonical
-> layout.
-
-Once downloaded, organize the raw images into a directory like:
-
-```
-raw_images/
-├── normal/    # *.jpg / *.png / *.jpeg / *.bmp
-├── sexual/
-└── violence/
-```
-
-Then run:
-
-```bash
-python preprocessing/prepare_dataset.py \
-    --input-dir  ./raw_images \
-    --output-dir ./dataset \
-    --train-ratio 0.8 \
-    --resize 512 \
-    --seed 42
-```
-
-The script verifies each image, optionally resizes to a square
-resolution, splits each class with the given ratio, and writes:
-
-```
-dataset/
-├── train/{normal,sexual,violence}/
-└── test/{normal,sexual,violence}/
-```
-
-The notebooks expect this exact layout. Per-class counts used in our
-experiments are reported in the paper.
+All notebooks ship with cleared outputs; rendered figures from a known-good
+run are in `figures/`.
 
 ---
 
-## Running the notebooks
+## Hyperspherical-latent extension (`ablation_sphere_vae.ipynb`)
 
-The notebooks are written for **Google Colab** with a Drive-mounted
-dataset zip, but they run unchanged on any Jupyter kernel as long as
-the `dataset/` directory above is on the path. Each notebook clears
-its outputs after a successful run, so a clean clone of this repo
-shows source only.
+**What changes vs `clip_vae.ipynb`.** The Gaussian VAE
+(`z = μ + σ ⊙ ε`, prior `N(0, I)`, KL closed-form) is replaced by a
+**von Mises–Fisher VAE** (`z ∼ vMF(μ, κ)` on `S^99`, prior uniform on
+the hypersphere, KL computed against `Uniform(S^99)`). The encoder
+output is normalized to a unit-vector mean direction `μ` and a positive
+concentration `κ`; the decoder L2-normalizes the reconstructed CLIP
+embedding to keep both ends of the loop on the unit sphere. Loss is
+identical in form: `(1 − cos(recon, x)) + β · KL`, with `β = 0.01`.
 
-### Suggested execution order
+**Why it should help.** CLIP image embeddings are L2-normalized — they
+already live on the unit sphere `S^511`, and CLIP similarity is purely
+angular (Wang & Isola, 2020). A Gaussian VAE compresses them into
+Euclidean `R^100` and then projects the decoder output back onto the
+sphere, which introduces an off-manifold detour the model has to learn
+around. The vMF formulation removes that detour: the latent lives
+natively on `S^99`, distances in latent space are geodesic distances on
+the sphere, and the prior is a meaningful uniform-on-sphere reference
+rather than the geometry-blind `N(0, I)`. This was flagged in the
+paper itself (Section 5, *Other Untested Alternatives*) as a natural
+match for CLIP's L2-normalized manifold but was left untested in the
+main submission.
 
-1. **`colab_codes/clip_vae.ipynb`** — trains the CLIP-VAE (512D → 100D),
-   produces the latent representations used by every downstream notebook.
-2. **`colab_codes/SDA_net.ipynb`** — trains the Semantic Distribution
-   Alignment Network on the CLIP-VAE latents.
-3. **`colab_codes/baseline_exp.ipynb`** — full baseline comparison,
-   reproduces the main quantitative tables and the F1 ≈ 89% classifier
-   reference.
-4. The five ablation notebooks
-   (`ablation_beta_vae`, `ablation_vqvae`, `ablation_dimensions`,
-   `ablation_inference`, `ablation_sphere_vae`) are independent and
-   can be run in any order.  Of these, `ablation_sphere_vae.ipynb`
-   substitutes the standard Gaussian VAE with a **von Mises–Fisher
-   VAE** so that latents live on the unit hypersphere `S^99`
-   instead of `R^100` — see its first cell for the
-   distributional / geometric background.
+**Measured effect.** On the test split with the same loss, β, and
+latent dimensionality as the main `clip_vae.ipynb`:
 
-> If you re-run on Colab, the first cell of each notebook unzips
-> `dataset.zip` from `/content/drive/MyDrive/semantic_wm/` into
-> `/content/semantic_wm/`. Replace this with a local path if running
-> off-Colab.
+| Variant | val CLIP cosine | `‖z‖` on test |
+|---|---:|---:|
+| `clip_vae.ipynb` (Gaussian VAE, baseline) | ~0.80 | not unit-constrained |
+| `ablation_sphere_vae.ipynb` (vMF VAE) | **0.846** | **1.000 ± 0.000** |
 
----
-
-## Hardware and runtime
-
-All experiments were performed on a single **NVIDIA Tesla T4** GPU
-(15.83 GB VRAM) — the default Google Colab free-tier GPU.
-
-Approximate wall-clock runtimes per notebook (T4):
-
-| Notebook | Time |
-|----------|------|
-| `clip_vae.ipynb` | ~25 min |
-| `SDA_net.ipynb` | ~15 min |
-| `baseline_exp.ipynb` | ~90 min |
-| `ablation_beta_vae.ipynb` | ~45 min |
-| `ablation_vqvae.ipynb` | ~30 min |
-| `ablation_dimensions.ipynb` | ~50 min |
-| `ablation_inference.ipynb` | ~20 min |
-| `ablation_sphere_vae.ipynb` | ~35 min |
-
-(Replace the table above with the exact numbers measured for the camera-ready version.)
+The hyperspherical variant raises reconstruction cosine by **~4–5
+points** on the same training setup, and the latent norm is *exactly*
+one at evaluation time (vs only approximately controlled by KL in the
+Gaussian case). The trade-off identified in the paper — vMF
+reparameterization being "less compatible with sign-based
+binarization" — still applies, so this ablation is reported as a
+latent-quality result rather than a drop-in replacement inside the
+full watermarking pipeline.
 
 ---
 
-## Reproducing tables and figures
+## Hardware
 
-- Quantitative tables in the paper are produced by the cells in
-  `baseline_exp.ipynb` and the five ablation notebooks.
-- The plots collected under `figures/` correspond directly to the
-  figures shown in the paper. File names follow the convention
-  `{notebook}__cell{NNN}__img{M}.png`, which matches the cell that
-  generated them.
-- `figures/pipeline_overview.png` is the project-level pipeline diagram
-  shown at the top of this README — it is **not** auto-generated from
-  a notebook and must be supplied separately (camera-ready).
+NVIDIA Tesla T4 (16 GB) — Google Colab free tier. The notebooks unzip
+`semantic_wm/dataset.zip` from `/content/drive/MyDrive/semantic_wm/`
+into `/content/semantic_wm/` on Colab, and read from `./dataset/`
+locally.
 
 ---
 
-## License
+## License & citation
 
-Code in this repository is released under the MIT License (see
-`LICENSE`, if present). The image dataset is **not** redistributed
-under any license — see the dataset section above.
-
----
-
-## Citation
-
-Anonymous submission. Citation information will be added after review.
+Code: MIT (see `LICENSE` if present). Datasets are not redistributed.
+Citation is suppressed during anonymous review and will be added after
+the ICML AI4Good 2026 decision.
