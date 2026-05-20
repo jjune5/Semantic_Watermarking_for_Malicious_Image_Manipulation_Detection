@@ -15,7 +15,26 @@ from sphere_wm.vmf import HypersphericalUniform, VonMisesFisher
 
 
 class HypersphericalVAE(nn.Module):
-    def __init__(self, input_dim: int = 512, hidden_dim: int = 256, latent_dim: int = 100):
+    """vMF VAE — port of cell 16 of ablation_sphere_vae.ipynb.
+
+    The only addition vs the notebook is ``kappa_init``: a bias added to the
+    softplus output of fc_kappa so initial κ is high. The notebook initializes
+    fc_kappa.bias near 0, giving κ ≈ 1.7 — at this concentration the vMF is
+    nearly uniform on S^99 and z carries no information, so the decoder learns
+    to ignore it. This is a chicken-and-egg: without a useful z the decoder
+    can't differentiate inputs, so κ has no incentive to grow, so z stays
+    uninformative. Initializing κ ≈ kappa_init (default 50) lets the decoder
+    use z from step 1 and the equilibrium settles in a non-collapsed regime.
+    Set ``kappa_init=None`` to keep the original notebook behavior.
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 512,
+        hidden_dim: int = 256,
+        latent_dim: int = 100,
+        kappa_init: float | None = 50.0,
+    ):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -29,6 +48,11 @@ class HypersphericalVAE(nn.Module):
         self.fc_d0 = nn.Linear(latent_dim, hidden_dim)
         self.fc_d1 = nn.Linear(hidden_dim, hidden_dim * 2)
         self.fc_out = nn.Linear(hidden_dim * 2, input_dim)
+
+        if kappa_init is not None:
+            # softplus(b) + 1 ≈ b + 1 when b is large, so this hits κ ≈ kappa_init
+            nn.init.zeros_(self.fc_kappa.weight)
+            nn.init.constant_(self.fc_kappa.bias, max(kappa_init - 1.0, 0.0))
 
     def encode(self, x):
         h = F.relu(self.fc_e0(x))

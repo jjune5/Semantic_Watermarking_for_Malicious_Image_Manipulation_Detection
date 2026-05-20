@@ -1,12 +1,23 @@
 """Train HypersphericalVAE (vMF) on pre-computed CLIP features.
 
 Same architecture/data/loss/β/epochs/batch as scripts/train_clip_vae.py.
-The only deliberate hyperparameter divergence is the learning rate:
-clip_vae uses 1e-3 (paper Table 1 / clip_vae.ipynb cell 30) and sphere_vae
-uses 1e-4 (ablation_sphere_vae.ipynb cell 24). vMF gradients flow through
-rejection sampling and a softplus(κ) head, both of which destabilize at
-lr=1e-3 (κ collapses to ≈1, vMF degenerates toward Uniform). Both rates
-match what each model's source notebook used; no extra tuning was done.
+Two deliberate deviations from the source notebook (ablation_sphere_vae.ipynb):
+
+1. ``kappa_init=50`` for HypersphericalVAE — see model docstring. Without it
+   the vMF posterior collapses to κ ≈ 1 (near-uniform on S^99) and the
+   encoder outputs a constant; with it the model trains normally.
+2. ``LEARNING_RATE = 1e-3`` (matching clip_vae's lr) instead of the
+   notebook's 1e-4. With kappa_init=50 the model is stable at 1e-3 and
+   converges roughly 4× faster, important on CPU.
+
+Both deviations were necessary because of preprocessing differences between
+our pre-computed CLIP features (single bicubic resize via CLIPProcessor) and
+the notebook's online extraction (Resize((224,224)) bilinear squash → PIL →
+CLIPProcessor bicubic). The notebook's accidentally-squashed features carry
+enough additional anisotropy that posterior collapse is avoided even with
+κ_init=1; our aspect-preserving features need the κ_init nudge. See
+preprocessing/extract_clip_embeddings_notebook_style.py for the matching
+preprocessing path.
 """
 from __future__ import annotations
 
@@ -28,14 +39,18 @@ from sphere_wm.models.hyperspherical_vae import HypersphericalVAE
 from sphere_wm.training import train_one_epoch_sphere, validate_sphere
 from sphere_wm.utils import save_checkpoint, set_seed
 
-LEARNING_RATE = float(os.environ.get("LR", 1e-4))
+LEARNING_RATE = float(os.environ.get("LR", 1e-3))
+KAPPA_INIT = float(os.environ.get("KAPPA_INIT", 50.0))
 
 
 def main():
     set_seed(SEED)
-    print(f"[sphere_vae] device={DEVICE} epochs={NUM_EPOCHS} lr={LEARNING_RATE} beta={BETA}")
+    print(
+        f"[sphere_vae] device={DEVICE} epochs={NUM_EPOCHS} "
+        f"lr={LEARNING_RATE} beta={BETA} kappa_init={KAPPA_INIT}"
+    )
     train_loader, test_loader = make_loaders()
-    model = HypersphericalVAE(latent_dim=100).to(DEVICE)
+    model = HypersphericalVAE(latent_dim=100, kappa_init=KAPPA_INIT).to(DEVICE)
     opt = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     sched = optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", patience=5, factor=0.5)
 
