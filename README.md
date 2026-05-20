@@ -34,10 +34,23 @@ colab_codes/
   ablation_vqvae.ipynb        # VQ-VAE vs VAE
   ablation_dimensions.ipynb   # Latent dimensionality sweep
   ablation_inference.ipynb    # Inference-time settings
-  ablation_sphere_vae.ipynb   # **Added — hyperspherical (vMF) latent on S^99**
+  ablation_sphere_vae.ipynb   # Hyperspherical (vMF) latent on S^99 ablation
 preprocessing/
-  prepare_dataset.py          # Build dataset/{train,test}/{normal,sexual,violence}/
-  extract_clip_embeddings.py  # CLIP-ViT-B/32 → embeddings/*.npy
+  prepare_dataset.py                          # Build dataset/{train,test}/{normal,sexual,violence}/
+  extract_clip_embeddings.py                  # CLIP-ViT-B/32 → embeddings/*.npy (aspect-preserving)
+  extract_clip_embeddings_notebook_style.py   # Bit-for-bit reproduction of the notebooks' CLIP path
+src/sphere_wm/
+  vmf.py                      # IveFunction, HypersphericalUniform, VonMisesFisher, kl_vmf_uniform
+  models/
+    hyperspherical_vae.py     # HypersphericalVAE (with kappa_init knob)
+    gaussian_vae.py           # CLIPCompressionVAE (Gaussian baseline)
+    watermarker.py            # LatentWatermarker — 4 binarization variants
+  data.py, losses.py, training.py, evaluation.py, config.py, utils.py
+scripts/
+  train_clip_vae.py           # Gaussian VAE — 30 epoch CPU/GPU trainer
+  train_sphere_vae.py         # vMF VAE — same trainer with kappa_init=50 + β=0 defaults
+  evaluate_binarization.py    # 4 binarize variants → results/comparison_table.{md,json}
+tests/                        # pytest suite (19 tests, all green)
 embeddings/                   # Pre-computed CLIP features (~16 MB)
 figures/                      # Plots from notebook runs + pipeline_overview.png
 requirements.txt
@@ -93,46 +106,109 @@ run are in `figures/`.
 
 ---
 
-## Hyperspherical-latent extension (`ablation_sphere_vae.ipynb`)
+## Hyperspherical-latent extension (`ablation_sphere_vae.ipynb` + `scripts/train_sphere_vae.py`)
 
 **What changes vs `clip_vae.ipynb`.** The Gaussian VAE
 (`z = μ + σ ⊙ ε`, prior `N(0, I)`, KL closed-form) is replaced by a
 **von Mises–Fisher VAE** (`z ∼ vMF(μ, κ)` on `S^99`, prior uniform on
 the hypersphere, KL computed against `Uniform(S^99)`). The encoder
-output is normalized to a unit-vector mean direction `μ` and a positive
-concentration `κ`; the decoder L2-normalizes the reconstructed CLIP
-embedding to keep both ends of the loop on the unit sphere. Loss is
-identical in form: `(1 − cos(recon, x)) + β · KL`, with `β = 0.01`.
+output is a unit-norm mean direction `μ` and a positive concentration
+`κ`; the decoder L2-normalizes the reconstructed CLIP embedding to
+keep both ends of the loop on the unit sphere. Loss is identical in
+form: `(1 − cos(recon, x)) + β · KL`.
 
-**Why it should help.** CLIP image embeddings are L2-normalized — they
-already live on the unit sphere `S^511`, and CLIP similarity is purely
+**Why we expected it to help.** CLIP image embeddings are L2-normalized —
+they already live on the unit sphere `S^511`, and CLIP similarity is
 angular (Wang & Isola, 2020). A Gaussian VAE compresses them into
 Euclidean `R^100` and then projects the decoder output back onto the
-sphere, which introduces an off-manifold detour the model has to learn
-around. The vMF formulation removes that detour: the latent lives
-natively on `S^99`, distances in latent space are geodesic distances on
-the sphere, and the prior is a meaningful uniform-on-sphere reference
-rather than the geometry-blind `N(0, I)`. This was flagged in the
-paper itself (Section 5, *Other Untested Alternatives*) as a natural
-match for CLIP's L2-normalized manifold but was left untested in the
-main submission.
+sphere, an off-manifold detour. The vMF formulation removes that detour:
+the latent lives natively on `S^99` and the prior is a meaningful
+uniform-on-sphere reference. This was flagged in the paper itself
+(Section 5, *Other Untested Alternatives*) as a natural match for CLIP's
+manifold but with a caveat — *"hyperspherical VAEs … use spherical
+reparameterizations that are less compatible with sign-based
+binarization"*.
 
-**Measured effect.** On the test split with the same loss, β, and
-latent dimensionality as the main `clip_vae.ipynb`:
+**Why a previous version of this README was wrong.** A prior commit on
+this branch compared *no-binarize sphere* (0.8457) against *binarize
+clip* (0.8285) and concluded sphere wins by 1.7pp. That was
+apples-to-oranges: the watermarking framework's whole point is the
+sign-binarization step, so removing it from one side of the comparison
+made the win artificial. The full reproduction below applies the same
+binarization pipeline to both models.
 
-| Variant | val CLIP cosine | `‖z‖` on test |
-|---|---:|---:|
-| `clip_vae.ipynb` (Gaussian VAE, baseline) | ~0.80 | not unit-constrained |
-| `ablation_sphere_vae.ipynb` (vMF VAE) | **0.846** | **1.000 ± 0.000** |
+**Reproduction (this repo).** Both encoders trained on identical 100-D
+latent + cosine recon loss + L2-normalized CLIP-ViT-B/32 features on
+the semantic_wm 8k-image dataset, 30 epochs, batch 64, lr=1e-3, Adam +
+ReduceLROnPlateau. Two configuration notes:
 
-The hyperspherical variant raises reconstruction cosine by **~4–5
-points** on the same training setup, and the latent norm is *exactly*
-one at evaluation time (vs only approximately controlled by KL in the
-Gaussian case). The trade-off identified in the paper — vMF
-reparameterization being "less compatible with sign-based
-binarization" — still applies, so this ablation is reported as a
-latent-quality result rather than a drop-in replacement inside the
-full watermarking pipeline.
+* **`clip_vae`** uses paper β=0.01 directly.
+* **`sphere_vae`** needs **`κ_init=50`** and **β=0** to escape a
+  posterior collapse where κ stalls at its softplus floor (≈1, i.e.
+  near-uniform vMF) and the encoder outputs a constant. The original
+  notebook accidentally avoided this by feeding the encoder
+  doubly-resized features (the `Resize((224,224))` → ToTensor →
+  ToPILImage → CLIPProcessor path in
+  `ablation_sphere_vae.ipynb` cell 14). With the same pipeline our
+  `extract_clip_embeddings.py` produces (aspect-preserving single
+  bicubic resize), the original β=0.01 setting collapses immediately.
+  We provide both extractors so either can be reproduced — see
+  `preprocessing/extract_clip_embeddings_notebook_style.py`.
+
+**Pre-binarization reconstruction cosine** (encoder → sample → decoder,
+no watermark):
+
+| Model | val CLIP cosine |
+|---|---:|
+| clip_vae (Gaussian, β=0.01) | **0.8678** |
+| sphere_vae (vMF, β=0, κ_init=50) | 0.8392 |
+
+So even **without** sign-binarization, the Gaussian VAE is now the
+slightly stronger reconstructor on our setup — the original 0.8457 vs
+0.8285 inversion was a preprocessing artifact, not a geometry win.
+
+**With sign-based binarization in the watermarking pipeline** (the
+honest, paper-faithful comparison — encoder → 100-bit watermark →
+reconstruct → decode → measure cosine vs original CLIP):
+
+| Model | Variant | Overall | Normal | Violence | Sexual |
+|---|---|---:|---:|---:|---:|
+| **clip_vae** | clip_default (paper pipeline)        | **0.8471** | 0.8134 | 0.8616 | 0.9001 |
+| sphere_vae   | clip_default (naive sign of z)        | 0.8219 | 0.7816 | 0.8367 | 0.8876 |
+| sphere_vae   | sphere_centered (sign of z − μ_train) | 0.8138 | 0.7727 | 0.8282 | 0.8815 |
+| sphere_vae   | sphere_rescaled (bits → ±σ + μ)       | **0.8307** | 0.7931 | 0.8445 | 0.8919 |
+| sphere_vae   | sphere_reprojected (rescale + L2)     | 0.8307 | 0.7932 | 0.8446 | 0.8918 |
+
+The Gaussian VAE wins by **~1.6 pp** in the realistic
+binarization-included regime even with the strongest sphere recovery
+variant (rescale by train-set per-dim std then add train-set mean).
+Sphere variants form a clear order: `clip_default` (naive) ≈ baseline,
+`sphere_centered` (center first) actually hurts because it discards
+the magnitude info that sphere_rescaled then re-injects;
+`sphere_reprojected` (rescale, then re-normalize to S^99) gives no
+extra over `sphere_rescaled` here.
+
+**Takeaway.** The vMF latent is a clean geometric match for CLIP's
+manifold and reconstructs comparably *before* binarization, but inside
+the full watermarking pipeline the sphere reparameterization gives up
+exactly what the paper's Section 5 predicted: enough information at
+the sign-binarize step to fall behind the Gaussian baseline. The
+sphere ablation stays in the repo as a latent-quality exploration but
+is *not* a drop-in replacement for `clip_vae` in the watermarking
+framework.
+
+To reproduce the table above end-to-end:
+
+```bash
+# Pre-compute CLIP features the way the notebooks do (one-time, ~10 min CPU)
+python preprocessing/extract_clip_embeddings_notebook_style.py
+# Train both models on cached features (~70 s each on CPU, faster on GPU)
+NUM_EPOCHS=30 python scripts/train_clip_vae.py
+NUM_EPOCHS=30 python scripts/train_sphere_vae.py
+# Generate the comparison table
+python scripts/evaluate_binarization.py
+cat results/comparison_table.md
+```
 
 ---
 
