@@ -8,9 +8,12 @@ Layout (produced by preprocessing/extract_clip_embeddings.py):
     ├── labels_train.npy          (N_train,)     int64
     └── labels_test.npy           (N_test,)      int64
 
-Features are L2-normalized at load time so every downstream module sees
-CLIP embeddings on the unit sphere (matching how `F.cosine_similarity`
-is used as the reconstruction loss).
+Features are returned as-is (RAW CLIP outputs, norm ≈ 10.5). This matches
+how the original notebooks (clip_vae*.ipynb, ablation_sphere_vae.ipynb)
+feed CLIP features into the VAE. ``F.cosine_similarity`` in the loss is
+scale-invariant, so unnormalized inputs do not affect the reconstruction
+objective; they only affect the encoder's effective input scale.
+Pass ``normalize=True`` to opt into unit-norm features.
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from sphere_wm.config import BATCH_SIZE, EMBEDDINGS_DIR
 
 
 class CLIPFeatureDataset(Dataset):
-    def __init__(self, split: str, normalize: bool = True):
+    def __init__(self, split: str, normalize: bool = False):
         if split not in ("train", "test"):
             raise ValueError(f"split must be 'train' or 'test', got {split!r}")
         feats_path = EMBEDDINGS_DIR / f"clip_features_{split}.npy"

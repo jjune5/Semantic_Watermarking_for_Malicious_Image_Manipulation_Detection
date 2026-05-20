@@ -1,11 +1,17 @@
 """Train HypersphericalVAE (vMF) on pre-computed CLIP features.
 
-Uses IDENTICAL training config to scripts/train_clip_vae.py so the only
-experimental difference is the latent geometry (Gaussian R^100 vs vMF on S^99).
+Same architecture/data/loss/β/epochs/batch as scripts/train_clip_vae.py.
+The only deliberate hyperparameter divergence is the learning rate:
+clip_vae uses 1e-3 (paper Table 1 / clip_vae.ipynb cell 30) and sphere_vae
+uses 1e-4 (ablation_sphere_vae.ipynb cell 24). vMF gradients flow through
+rejection sampling and a softplus(κ) head, both of which destabilize at
+lr=1e-3 (κ collapses to ≈1, vMF degenerates toward Uniform). Both rates
+match what each model's source notebook used; no extra tuning was done.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -14,13 +20,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import torch.optim as optim
 
-from sphere_wm.config import (BETA, CHECKPOINT_DIR, DEVICE, LEARNING_RATE,
+from sphere_wm.config import (BETA, CHECKPOINT_DIR, DEVICE,
                               NUM_EPOCHS, RESULTS_DIR, SEED)
 from sphere_wm.data import make_loaders
 from sphere_wm.losses import hyperspherical_vae_loss
 from sphere_wm.models.hyperspherical_vae import HypersphericalVAE
 from sphere_wm.training import train_one_epoch_sphere, validate_sphere
 from sphere_wm.utils import save_checkpoint, set_seed
+
+LEARNING_RATE = float(os.environ.get("LR", 1e-4))
 
 
 def main():
