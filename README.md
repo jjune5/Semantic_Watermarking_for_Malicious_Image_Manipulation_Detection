@@ -1,8 +1,6 @@
 # CLIP-VAE & SDA-Net: Distribution-Based Semantic Watermarking
 
-Code release for the ICML AI4Good 2026 submission *Semantic Watermarking
-for Malicious Image Manipulation Detection*. The framework embeds a
-recoverable semantic reference into an image as a 100-bit watermark
+The framework embeds a recoverable semantic reference into an image as a 100-bit watermark
 (**CLIP-VAE**) and exposes the direction of any post-hoc manipulation
 through a lightweight prototype module (**SDA-Net**).
 
